@@ -1,0 +1,307 @@
+/* ************************************************************************** */
+/*                                                                            */
+/*                                                        :::      ::::::::   */
+/*   free.c                                             :+:      :+:    :+:   */
+/*                                                    +:+ +:+         +:+     */
+/*   By: joao-pol <joao-pol@student.42porto.com>    +#+  +:+       +#+        */
+/*                                                +#+#+#+#+#+   +#+           */
+/*   Created: 2024/07/17 12:06:02 by joao-pol          #+#    #+#             */
+/*   Updated: 2024/07/17 12:41:42 by joao-pol         ###   ########.fr       */
+/*                                                                            */
+/* ************************************************************************** */
+
+#include "ft_printf/libft/libft.h"
+#include "pipex.h"
+
+int	ft_error_msg(t_pipex *pipex, char *error_msg, int ERRNO)
+{
+	if (ERRNO != 127)
+	{
+		perror(error_msg);
+	}
+	else
+		ft_putstr_fd(error_msg, 2);
+	ft_free_files(pipex);
+	if (ERRNO != SUCCESS)
+		exit(ERRNO);
+	return (ERRNO);
+}
+
+void	ft_free_files(t_pipex *pipex)
+{
+	int	i;
+
+	if (pipex->infile != -1)
+		close(pipex->infile);
+	if (pipex->outfile != -1)
+		close(pipex->outfile);
+	if (pipex->pipe[0] != -1)
+		close(pipex->pipe[0]);
+	if (pipex->pipe[1] != -1)
+		close(pipex->pipe[1]);
+	i = 0;
+	if (pipex->cmd_paths)
+	{
+		while (pipex->cmd_paths[i])
+			free(pipex->cmd_paths[i++]);
+		free(pipex->cmd_paths);
+	}
+	i = 0;
+	if (pipex->cmd_args)
+	{
+		while (pipex->cmd_args[i])
+			free(pipex->cmd_args[i++]);
+		free(pipex->cmd_args);
+	}
+}
+
+void	ft_free_split(char **str, size_t index)
+{
+	size_t	j;
+
+	if (!str)
+		return ;
+	j = 0;
+	while (j < index)
+	{
+		free(str[j]);
+		j++;
+	}
+	free(str);
+}
+/* ************************************************************************** */
+/*                                                                            */
+/*                                                        :::      ::::::::   */
+/*   main.c                                             :+:      :+:    :+:   */
+/*                                                    +:+ +:+         +:+     */
+/*   By: joao-pol <joao-pol@student.42porto.com>    +#+  +:+       +#+        */
+/*                                                +#+#+#+#+#+   +#+           */
+/*   Created: 2024/07/10 16:04:52 by joao-pol          #+#    #+#             */
+/*   Updated: 2024/07/19 15:55:39 by joao-pol         ###   ########.fr       */
+/*                                                                            */
+/* ************************************************************************** */
+
+#include "ft_printf/libft/libft.h"
+#include "pipex.h"
+#include <unistd.h>
+
+int	main(int argc, char *argv[], char *envp[])
+{
+	t_pipex	pipex;
+	int		error;
+
+	error = 0;
+	if (argc != 5)
+		return (ft_putstr_fd("Error with Input", 2), INPUT_ERROR);
+	error = ft_init_pipex(&pipex, argv, envp);
+	if (error != SUCCESS)
+		return (error);
+	ft_pipex(&pipex, argv, envp);
+	ft_free_files(&pipex);
+	return (error);
+}
+
+int	ft_init_pipex(t_pipex *pipex, char *argv[], char *envp[])
+{
+	pipex->cmd_args = NULL;
+	pipex->cmd_paths = NULL;
+	pipex->infile = -1;
+	pipex->outfile = -1;
+	pipex->infile = open(argv[1], O_RDONLY);
+	pipex->pipe[0] = -1;
+	pipex->pipe[1] = -1;
+	if (pipex->infile == -1)
+		exit (ft_error_msg(pipex, argv[1], INFILE_ERROR));
+	pipex->outfile = open(argv[4], O_WRONLY | O_CREAT | O_TRUNC, 0644);
+	if (pipex->outfile == -1)
+		exit (ft_error_msg(pipex, argv[4], OUTFILE_ERROR));
+	if (pipe(pipex->pipe) == -1)
+		exit (ft_error_msg(pipex, "Error with Pipe ", PIPE_ERROR));
+	pipex->find_path = ft_find_path(envp, *pipex);
+	pipex->cmd_paths = ft_split(pipex->find_path, ':');
+	if (!pipex->cmd_paths)
+		exit (ft_error_msg(pipex, "Error with cmd_paths", MEMORY_ERROR));
+	return (SUCCESS);
+}
+
+void	ft_pipex(t_pipex *pipex, char *argv[], char *envp[])
+{
+	pipex->pid1 = fork();
+	if (pipex->pid1 == -1)
+		ft_error_msg(pipex, "Error with fork", FORK_ERROR);
+	else if (!pipex->pid1)
+	{
+		ft_child_process(*pipex, argv, envp);
+	}
+	waitpid(pipex->pid1, NULL, 0);
+	pipex->pid2 = fork();
+	if (pipex->pid2 == -1)
+		ft_error_msg(pipex, "Error with fork", FORK_ERROR);
+	if (pipex->pid2 == 0)
+	{
+		ft_parent_process(*pipex, argv, envp);
+	}
+	close(pipex->pipe[0]);
+	close(pipex->pipe[1]);
+	close(pipex->outfile);
+	waitpid(pipex->pid2, NULL, 0);
+}
+
+void	ft_child_process(t_pipex pipex, char **argv, char **envp)
+{
+	if (dup2(pipex.pipe[1], STDOUT_FILENO) == -1)
+		ft_error_msg(&pipex, "Error with STDOUT in child", FD_STDOUT_CHILD);
+	close(pipex.pipe[0]);
+	if (dup2(pipex.infile, STDIN_FILENO) == -1)
+		ft_error_msg(&pipex, "Error with STDIN in child", FD_STDIN_CHILD);
+	pipex.cmd_args = ft_split(argv[2], ' ');
+	if (ft_check_quotes(pipex.cmd_args) == 0)
+		ft_error_msg(&pipex, "Error with EXECVE", EXECVE_ERROR_CHILD);
+	if (ft_get_cmd(&pipex) == -1)
+		ft_error_msg(&pipex, ": command not found\n", 127);
+	if (execve(pipex.cmd, pipex.cmd_args, envp) == -1)
+		ft_error_msg(&pipex, pipex.cmd_args[0], 1);
+}
+
+void	ft_parent_process(t_pipex pipex, char **argv, char **envp)
+{
+	if (dup2(pipex.pipe[0], STDIN_FILENO) == -1)
+		ft_error_msg(&pipex, "Error with STDOUT in parent", FD_STDOUT_PARENT);
+	close(pipex.pipe[1]);
+	if (dup2(pipex.outfile, STDOUT_FILENO) == -1)
+		ft_error_msg(&pipex, "Error with STDIN in parent", FD_STDIN_PARENT);
+	pipex.cmd_args = ft_split(argv[3], ' ');
+	if (ft_check_quotes(pipex.cmd_args) == 0)
+		ft_error_msg(&pipex, "Error with ", EXECVE_ERROR_PARENT);
+	pipex.cmd = pipex.cmd_args[0];
+	if (ft_get_cmd(&pipex) == -1)
+		ft_error_msg(&pipex, ": command not found\n", 127);
+	if (execve(pipex.cmd, pipex.cmd_args, envp) == -1)
+		ft_error_msg(&pipex, pipex.cmd_args[0], 1);
+}
+/* ************************************************************************** */
+/*                                                                            */
+/*                                                        :::      ::::::::   */
+/*   utils.c                                            :+:      :+:    :+:   */
+/*                                                    +:+ +:+         +:+     */
+/*   By: joao-pol <joao-pol@student.42porto.com>    +#+  +:+       +#+        */
+/*                                                +#+#+#+#+#+   +#+           */
+/*   Created: 2024/07/17 13:05:13 by joao-pol          #+#    #+#             */
+/*   Updated: 2024/07/17 13:06:03 by joao-pol         ###   ########.fr       */
+/*                                                                            */
+/* ************************************************************************** */
+
+#include "ft_printf/libft/libft.h"
+#include "pipex.h"
+
+/*
+    [parent]
+     |     \
+     |      \     [parent] gets a pid ->pid1
+     |       \
+   [child(1)]   	[parent]
+
+[child(1)] will 		|     \
+receive the   			|      \    [parent] gets a pid -> pid2
+input		  			|       \
+			  		child(2)]    [parent] 
+					Wait for the children to end waitpid(pid1 and pid2) ;
+
+                child(2) will change the output
+*/
+
+//FIND PATH: in the environment variables
+
+char	*ft_find_path(char *envp[], t_pipex pipex)
+{
+	while (*envp)
+	{
+		if (ft_strncmp("PATH=", *envp, 5) != 0)
+			envp++;
+		else
+			return (*envp + 5);
+	}
+	ft_error_msg(&pipex, "PATH NOT FOUND", 1);
+	return (NULL);
+}
+
+// Get the full path to the command binary
+int	ft_get_cmd(t_pipex *pipex)
+{
+	char	*temp;
+	int		i;
+	int		err;
+
+	i = 0;
+	temp = NULL;
+	if (!pipex->cmd_args || !pipex->cmd_args[0])
+		return (ft_putstr_fd(pipex->cmd_args[0], 2), -1);
+	while (pipex->cmd_paths[i])
+	{
+		temp = ft_strjoin(pipex->cmd_paths[i], "/");
+		temp = ft_strjoin_free(temp, ft_strdup(pipex->cmd_args[0]));
+		err = access(temp, X_OK);
+		if (err == 0)
+		{
+			pipex->cmd = temp;
+			return (0);
+		}
+		free(temp);
+		i++;
+	}
+	ft_putstr_fd(pipex->cmd_args[0], 2);
+	return (-1);
+}
+
+int	ft_check_quotes(char **cmd_args)
+{
+	int	i;
+	int	j;
+	int	count;
+
+	i = 0;
+	while (cmd_args[i])
+	{
+		j = 0;
+		count = 0;
+		while (cmd_args[i][j])
+		{
+			if (cmd_args[i][j] == '\'')
+				count++;
+			j++;
+		}
+		if (count % 2 != 0)
+			return (ft_free_split(cmd_args, j), 0);
+		i++;
+	}
+	return (1);
+}
+
+char	*ft_strjoin_free(char const *s1, char const *s2)
+{
+	char	*join;
+	int		i;
+	int		j;
+
+	if (!s1 || !s2)
+		return (NULL);
+	join = (char *) malloc(sizeof(char) * (ft_strlen(s1) + ft_strlen(s2)) + 1);
+	if (!join)
+		return (free((void *)s1), free((void *)s2), NULL);
+	i = 0;
+	j = 0;
+	while (s1[i])
+	{
+		join[i] = s1[i];
+		i++;
+	}
+	while (s2[j])
+	{
+		join[i + j] = s2[j];
+		j++;
+	}
+	join[i + j] = 0;
+	free((void *)s1);
+	free((void *)s2);
+	return (join);
+}
